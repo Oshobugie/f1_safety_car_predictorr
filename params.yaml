@@ -1,0 +1,13 @@
+data_ingestion:
+  dataset_download_url: "https://api.jolpi.ca/ergast"
+  raw_data_dir: "artifacts/data_ingestion/raw"
+  ingested_data_dir: "artifacts/data_ingestion/processed"
+
+data_transformation:
+  transformed_data_dir: "artifacts/data_transformation"
+  transformed_data_file_path: "artifacts/data_transformation/transformed.npy"
+  preprocessor_obj_file_path: "artifacts/data_transformation/preprocessor.joblib"
+
+model_trainer:
+  trained_model_dir: "artifacts/model_trainer"
+  trained_model_file_path: "artifacts/model_trainer/model.joblib"
