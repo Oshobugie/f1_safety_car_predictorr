@@ -1,55 +1,134 @@
-# 🏎️ F1 Safety Car Detector (V1 MVP)
+# 🏎️ F1 Safety Car Predictor
 
-A real-time Formula 1 Safety Car detection service built as an end-to-end MLOps pipeline. Given a driver's current track position and lap time, the API estimates the probability that a Safety Car is currently deployed on track.
+[![Continuous Integration](https://github.com/Oshobugie/f1_safety_car_predictorr/actions/workflows/ci.yml/badge.svg)](https://github.com/Oshobugie/f1_safety_car_predictorr/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![XGBoost](https://img.shields.io/badge/XGBoost-Classifier-EB5E28)
+![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)
 
-> **Scope Note:** This is a **real-time incident detector**, not a pre-race crystal ball. Because crashes and mechanical failures happen unpredictably, the model evaluates live pace shifts rather than forecasting which future lap an accident will occur on.
-
----
-
-## 🛠️ What This Pipeline Does
-
-1. **Automated Data Ingestion:** Pulls historical lap-by-lap race telemetry from the Ergast F1 API.
-2. **Leak-Free Transformation:** Converts lap strings into total seconds, handles missing values with `SimpleImputer`, and scales features using `StandardScaler`.
-3. **Imbalanced Classification:** Trains an `XGBClassifier` tuned with `scale_pos_weight` to handle the rarity of Safety Car laps compared to green-flag racing, tracked via MLflow.
-4. **Low-Latency Serving:** Serves predictions through a FastAPI REST endpoint (`/predict`) using Pydantic input validation and startup `lifespan` memory caching.
+An end-to-end MLOps machine learning pipeline and containerized FastAPI microservice that predicts Formula 1 Safety Car deployments (`is_safety_car`) and deployment probabilities from real-time lap telemetry (`position` and `lap_time_sec`).
 
 ---
 
-## 🚀 Quickstart
+## 🌐 Live API & Interactive Documentation
 
-### 1. Start the API Server
+Hosted as a containerized Docker web service on **Render** with automated deployments gated behind GitHub Actions CI checks:
+
+* **Interactive Swagger UI (`/docs`):** [https://f1-safety-car-predictor.onrender.com/docs](https://f1-safety-car-predictor.onrender.com/docs)
+* **Health Check Endpoint (`/`):** [https://f1-safety-car-predictor.onrender.com/](https://f1-safety-car-predictor.onrender.com/)
+
+> **Note:** This service runs on Render's free tier and spins down after 15 minutes of inactivity. The first request after an idle period may take **30–50 seconds** to wake the container.
+
+### Sample Live Prediction Request
+
 ```bash
-uvicorn app:app --reload
+curl -X POST "[https://f1-safety-car-predictor.onrender.com/predict](https://f1-safety-car-predictor.onrender.com/predict)" \
+  -H "Content-Type: application/json" \
+  -d '{"position": 15, "lap_time_sec": 113.99}'
 ```
 
-### 2. Query the Prediction Endpoint
-Send a `POST` request to `/predict` with a car's current position and lap time in seconds (for example, `1:53.99` converts to `113.99` seconds):
-
-```bash
-curl -X POST "http://127.0.0.1:8000/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"position": 15, "lap_time_sec": 113.99}'
-```
-
-**Sample Response:**
+**Response:**
 ```json
 {
-  "is_safety_car": 0,
-  "safety_car_probability": 0.2138
+  "is_safety_car": 1,
+  "safety_car_probability": 0.8742
 }
 ```
 
 ---
 
-## 🔍 Engineering Lessons & Known Flaws (V1)
+## 🏗️ System Architecture & CI/CD Pipeline
 
-* **Catching Target Leakage:** Early iterations included race metadata (`season`, `round`, `lap_number`), producing a suspicious `1.0000` ROC-AUC because the model memorized specific historical races. Stripping those identifiers dropped ROC-AUC to a realistic **`0.8551`** (Log Loss: `0.4346`), forcing the model to rely purely on on-track pace.
-* **The Single-Driver Limitation:** V1 evaluates one driver's lap at a time. While a Safety Car slows the entire field down, a single driver making a routine pit stop (~20–25s loss) or running on wet tires in heavy rain also records slow lap times—which can trigger false positives without grid-wide context.
+```text
+Ergast F1 API (2023 Season)
+        │
+        ▼
+[1. Data Ingestion] ──► races_raw.json & races_ingested.csv
+        │
+        ▼
+[2. Data Transformation] ──► Median Imputation + StandardScaler ──► preprocessor.joblib
+        │
+        ▼
+[3. Model Trainer] ──► Stratified Split + XGBoost + MLflow ──► model.joblib
+        │
+        ▼
+[4. FastAPI Service] ──► Packaged in Docker (Port 7860)
+        │
+        ▼
+[5. GitHub Actions CI] ──► Runs pytest test_app.py on push to main
+        │
+        ▼ (Only after CI passes)
+[6. Render Cloud CD] ──► Auto-builds & deploys live container
+```
+
+### Key Engineering Highlights
+* **Leakage-Free Feature Engineering:** Converts lap timings (`M:SS.mmm`) to numeric seconds, maps ground-truth 2023 Safety Car laps, and drops race identifiers (`round`, `lap_number`, `driverId`, `raceName`) prior to scaling so the model generalizes strictly on telemetry.
+* **Class Imbalance Handling:** Applies stratified train-test splitting (`stratify=y`) and computes `scale_pos_weight` dynamically from the training split to account for rare Safety Car laps.
+* **Experiment Tracking:** Logs hyperparameters, `ROC-AUC`, `Log Loss`, `Accuracy`, and serialized models to MLflow (`F1_Safety_Car_Prediction`).
+* **Automated Quality Gate:** Every push to `main` triggers `.github/workflows/ci.yml` to run `pytest test_app.py`, verifying artifact loading and `/predict` response schemas before Render deploys a new container.
 
 ---
 
-## 🗺️ V2 Roadmap
+## 📂 Project Structure
 
-* **Grid-Wide Aggregation:** Compare a driver's lap time against the median pace of all 20 cars on that lap to separate isolated pit stops from full-course neutralizations.
-* **Environmental Context:** Integrate track type (street vs. traditional) and live weather conditions.
-* **Production Ops:** Containerize the FastAPI service with Docker and add automated CI/CD testing.
+```text
+f1_safety_car_predictorr/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  # GitHub Actions CI test pipeline
+├── artifacts/
+│   ├── data_transformation/
+│   │   └── preprocessor.joblib     # Fitted imputer + StandardScaler pipeline
+│   └── model_trainer/
+│       └── model.joblib            # Trained XGBoost classifier
+├── src/
+│   ├── components/
+│   │   ├── data_ingestion.py       # Ergast API extraction & JSON normalization
+│   │   ├── data_transformation.py  # Feature engineering, labeling & preprocessing
+│   │   └── model_trainer.py        # Stratified XGBoost training & MLflow logging
+│   ├── config/
+│   │   └── configuration.py        # YAML-to-dataclass configuration manager
+│   ├── entity/                     # Config & artifact dataclasses
+│   ├── exception.py                # Custom exception wrapper with file/line trace
+│   └── logger.py                   # Structured timestamped logging
+├── app.py                          # FastAPI inference service
+├── main.py                         # End-to-end training pipeline entrypoint
+├── test_app.py                     # Automated FastAPI smoke tests
+├── Dockerfile                      # Slim Python 3.11 production container
+├── params.yaml                     # Pipeline paths and configuration parameters
+└── requirements.txt                # Python dependencies
+```
+
+---
+
+## 🚀 Running Locally
+
+### 1. Local Python Environment
+```bash
+# Clone the repository
+git clone [https://github.com/Oshobugie/f1_safety_car_predictorr.git](https://github.com/Oshobugie/f1_safety_car_predictorr.git)
+cd f1_safety_car_predictorr
+
+# Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# (Optional) Re-run the full training pipeline
+python main.py
+
+# Run automated API tests
+pytest test_app.py
+
+# Start the FastAPI server
+uvicorn app:app --host 0.0.0.0 --port 7860 --reload
+```
+
+### 2. Docker Container
+```bash
+docker build -t f1-safety-car-predictor .
+docker run -p 7860:7860 f1-safety-car-predictor
+```
+Then open `http://localhost:7860/docs` in your browser.
